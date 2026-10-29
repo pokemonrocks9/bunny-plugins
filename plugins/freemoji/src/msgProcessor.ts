@@ -1,64 +1,56 @@
 import { findByStoreName } from "@vendetta/metro";
 import { storage } from "@vendetta/plugin";
 import { Message } from "./def";
-const { getCustomEmojiById } = findByStoreName("EmojiStore");
-const { getGuildId } = findByStoreName("SelectedGuildStore");
+
+// Keep the store objects (not destructured methods) so `this` stays intact,
+// and so a missing store doesn't throw at plugin load.
+const EmojiStore = findByStoreName("EmojiStore");
+const SelectedGuildStore = findByStoreName("SelectedGuildStore");
+const UserStore = findByStoreName("UserStore");
 
 // https://github.com/luimu64/nitro-spoof/blob/1bb75a2471c39669d590bfbabeb7b922672929f5/index.js#L25
-const hasEmotesRegex = /<a?:(\w+):(\d+)>/i;
+const emojiRegex = /<a?:(\w+):(\d+)>/gi;
 
-function extractUnusableEmojis(messageString: string, size: number) {
-	const emojiStrings = messageString.matchAll(/<a?:(\w+):(\d+)>/gi);
-
-	for (const emojiString of emojiStrings) {
-		// Fetch required info about the emoji
-		const emoji = getCustomEmojiById(emojiString[2]);
-
-		// Check emoji usability
-		if (
-			emoji.guildId != getGuildId() ||
-			emoji.animated
-		) {
-			// Add to emotes to send
-			// Hacky fix, someone on discord removed url property for emoji
-			// I dunno if webp works everywhere
-			const ext = "webp";
-			let baseUrl = `https://cdn.discordapp.com/emojis/${emojiString[2]}.${ext}?size=${size}&quality=lossless&name=${emojiString[1]}`;
-			if (emoji.animated) {
-    			baseUrl += "&animated=true";
-			}
-			
-			const linkText = storage.customHyperLinkString || emojiString[1];
-			const replacement = storage.hyperlink
-  				? `[${linkText}](${baseUrl})`
-  				: baseUrl;
-
-			messageString = messageString.replace(emojiString[0], replacement);
-		}
-	}
-	
-	return { 
-        newContent: messageString.trim()
-    };
+// premiumType: 0/undefined = none, 1 = Nitro Classic, 2 = Nitro, 3 = Nitro Basic.
+// Basic can NOT use external/animated emoji, so only 1 and 2 count as "real" Nitro here.
+function hasRealNitro(): boolean {
+	const type = UserStore?.getCurrentUser?.()?.premiumType;
+	return type === 1 || type === 2;
 }
 
-export default function modifyIfNeeded(msg: Message) {
-	if (!msg.content.match(hasEmotesRegex)) return;
-	if (!storage.forceMoji) { if (storage.haveNitro) return; }
+function convertUnusableEmojis(content: string, size: number): string {
+	const currentGuildId = SelectedGuildStore?.getGuildId?.();
 
-	// Find all emojis from the captured message string and return object with ~~emojiURLS and~~ content
-	const { newContent } = extractUnusableEmojis(msg.content, storage.emojiSize);
+	return content.replace(emojiRegex, (full: string, name: string, id: string) => {
+		// The markup itself tells us whether it's animated, no store lookup needed
+		const animated = full.startsWith("<a:");
+		const emoji = EmojiStore?.getCustomEmojiById?.(id);
+
+		// Usable without Nitro: static emoji from the guild you're currently in.
+		// If the store doesn't know the emoji at all, treat it as unusable.
+		if (emoji && !animated && emoji.guildId == currentGuildId) return full;
+
+		// Someone removed the url property from emoji, so build the CDN url by hand.
+		// I dunno if webp works everywhere
+		let url = `https://cdn.discordapp.com/emojis/${id}.webp?size=${size}&quality=lossless&name=${name}`;
+		if (animated) url += "&animated=true";
+
+		if (!storage.hyperlink) return url;
+		const linkText = storage.customHyperLinkString || name;
+		return `[${linkText}](${url})`;
+	});
+}
+
+export default function modifyIfNeeded(msg?: Message) {
+	// content can be missing (e.g. uploads, stickers), never assume it exists
+	if (!msg?.content) return;
+	if (!storage.forceMoji && hasRealNitro()) return;
+
+	const newContent = convertUnusableEmojis(msg.content, storage.emojiSize).trim();
+	if (newContent === msg.content.trim()) return;
 
 	msg.content = newContent;
 
-	// if (extractedEmojis.length > 0) {
-	// 	if (storage.hyperlink === true) { 
-	// 		msg.content += " " + extractedEmojis.join(" "); 
-	// 	} else { 
-	// 		msg.content += "\n" + extractedEmojis.join("\n"); 
-	// 	}
-	// }
-
-	// Set invalidEmojis to empty to prevent Discord yelling to you about you not having nitro
+	// Set invalidEmojis to empty to prevent Discord yelling at you about not having nitro
 	msg.invalidEmojis = [];
 };
