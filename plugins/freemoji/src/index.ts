@@ -3,7 +3,6 @@ import { showConfirmationAlert } from "@vendetta/ui/alerts";
 import { showToast } from "@vendetta/ui/toasts";
 import nitroChecks from "./patches/nitroChecks";
 import sendMessage from "./patches/sendMessage";
-import { runProbe } from "./probe";
 
 storage.emojiSize ??= 48;
 storage.hyperlink ??= true;
@@ -37,9 +36,6 @@ for (const [name, apply] of [["nitroChecks", nitroChecks], ["sendMessage", sendM
 }
 
 try { showToast(`Freemoji: nitro ${counts.nitroChecks}, send ${counts.sendMessage}`); } catch {}
-
-// TEMPORARY: remove together with probe.ts once the picker lock is fixed
-try { setTimeout(runProbe, 4000); } catch {}
 
 export const onUnload = () => patches.forEach(p => p());
 export { default as settings } from "./Settings";
