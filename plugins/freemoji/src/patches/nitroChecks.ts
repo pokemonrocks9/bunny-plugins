@@ -1,36 +1,37 @@
 import { findByProps, findByPropsAll, findByStoreName } from "@vendetta/metro";
+import { storage } from "@vendetta/plugin";
 import { instead, after } from "@vendetta/patcher";
 import { setRealPremiumType, clearRealPremiumType } from "../premium";
+import { UNLOCK_NAMES, unlockKey } from "../unlocks";
 
 const NAMES = ["canUseEmojisEverywhere", "canUseAnimatedEmojis"];
 const SPOOFED_TYPE = 2;
 
-// What the emoji picker / validation actually consult on current Discord builds.
-// Found with the probe: these are all plain writable functions, unlike the frozen canUse* ones.
-const EMOJI_UNLOCKS: Record<string, () => any> = {
-	isEmojiPremiumLocked: () => false,
-	isEmojiCategoryNitroLocked: () => false,
-	isEmojiFilteredOrLocked: () => false,
-	isEmojiFiltered: () => false,
-	isEmojiDisabled: () => false,
-	getEmojiUnavailableReasons: () => [],
-	getEmojiUnavailableReason: () => null,
-};
+// Keep the shape Discord expects: booleans become false, arrays become empty,
+// anything else is returned untouched.
+function unlockResult(ret: any) {
+	if (typeof ret === "boolean") return false;
+	if (Array.isArray(ret)) return [];
+	return ret;
+}
 
-function unlockEmojiChecks(): (() => void)[] {
+function unlockEmojiChecks(diag: string[]): (() => void)[] {
 	const out: (() => void)[] = [];
-	for (const [name, value] of Object.entries(EMOJI_UNLOCKS)) {
+	for (const name of UNLOCK_NAMES) {
+		if (storage[unlockKey(name)] === false) continue; // switched off in settings
 		try {
 			const mod = findByProps(name);
-			if (typeof mod?.[name] !== "function") continue;
-			out.push(instead(name, mod, value));
-		} catch {}
+			if (typeof mod?.[name] !== "function") { diag.push(`${name} not found`); continue; }
+			out.push(instead(name, mod, (args: any[], orig: (...a: any[]) => any) => unlockResult(orig(...args))));
+		} catch (e: any) {
+			diag.push(`${name}: ${e?.message ?? e}`);
+		}
 	}
 	return out;
 }
 
 // Older Discord builds: force the canUse* functions to return true.
-// Newer builds freeze these exports (writable=false configurable=false), so this just does nothing there.
+// Newer builds freeze these exports (writable=false configurable=false), so this does nothing there.
 function forceTrue(obj: any, name: string): (() => void) | null {
 	if (typeof obj?.[name] !== "function") return null;
 	const desc = Object.getOwnPropertyDescriptor(obj, name);
@@ -92,8 +93,8 @@ function spoofPremiumType(): (() => void) | null {
 }
 
 export default function apply() {
-	const patches: (() => void)[] = [...unlockEmojiChecks()];
 	const diag: string[] = [];
+	const patches: (() => void)[] = [...unlockEmojiChecks(diag)];
 
 	for (const name of NAMES) {
 		const mods = [findByProps(name), ...((findByPropsAll?.(name) as any[]) ?? [])].filter(Boolean);
@@ -108,15 +109,17 @@ export default function apply() {
 		}
 	}
 
-	try {
-		const undo = spoofPremiumType();
-		if (undo) patches.push(undo);
-		else diag.push("user spoof unavailable");
-	} catch (e: any) {
-		diag.push(`spoof error: ${e?.message ?? e}`);
+	if (storage.spoofNitro !== false) {
+		try {
+			const undo = spoofPremiumType();
+			if (undo) patches.push(undo);
+			else diag.push("user spoof unavailable");
+		} catch (e: any) {
+			diag.push(`spoof error: ${e?.message ?? e}`);
+		}
 	}
 
-	if (!patches.length) {
+	if (!patches.length && diag.length) {
 		throw new Error(`Couldn't patch any emoji/Nitro checks. ${diag.join(" | ")}`);
 	}
 
