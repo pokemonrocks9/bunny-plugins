@@ -5,9 +5,32 @@ import { setRealPremiumType, clearRealPremiumType } from "../premium";
 const NAMES = ["canUseEmojisEverywhere", "canUseAnimatedEmojis"];
 const SPOOFED_TYPE = 2;
 
-// Attempt 1: force the Nitro check functions to return true.
-// Newer Discord builds freeze these exports (writable=false configurable=false),
-// in which case this fails and we fall back to spoofing the user record instead.
+// What the emoji picker / validation actually consult on current Discord builds.
+// Found with the probe: these are all plain writable functions, unlike the frozen canUse* ones.
+const EMOJI_UNLOCKS: Record<string, () => any> = {
+	isEmojiPremiumLocked: () => false,
+	isEmojiCategoryNitroLocked: () => false,
+	isEmojiFilteredOrLocked: () => false,
+	isEmojiFiltered: () => false,
+	isEmojiDisabled: () => false,
+	getEmojiUnavailableReasons: () => [],
+	getEmojiUnavailableReason: () => null,
+};
+
+function unlockEmojiChecks(): (() => void)[] {
+	const out: (() => void)[] = [];
+	for (const [name, value] of Object.entries(EMOJI_UNLOCKS)) {
+		try {
+			const mod = findByProps(name);
+			if (typeof mod?.[name] !== "function") continue;
+			out.push(instead(name, mod, value));
+		} catch {}
+	}
+	return out;
+}
+
+// Older Discord builds: force the canUse* functions to return true.
+// Newer builds freeze these exports (writable=false configurable=false), so this just does nothing there.
 function forceTrue(obj: any, name: string): (() => void) | null {
 	if (typeof obj?.[name] !== "function") return null;
 	const desc = Object.getOwnPropertyDescriptor(obj, name);
@@ -31,7 +54,7 @@ function forceTrue(obj: any, name: string): (() => void) | null {
 	return null;
 }
 
-// Attempt 2: make the client believe the current user has Nitro.
+// Make the client believe the current user has Nitro (quiets the upsell UI).
 function spoofPremiumType(): (() => void) | null {
 	const UserStore = findByStoreName("UserStore");
 	const user = UserStore?.getCurrentUser?.();
@@ -69,7 +92,7 @@ function spoofPremiumType(): (() => void) | null {
 }
 
 export default function apply() {
-	const patches: (() => void)[] = [];
+	const patches: (() => void)[] = [...unlockEmojiChecks()];
 	const diag: string[] = [];
 
 	for (const name of NAMES) {
@@ -84,20 +107,18 @@ export default function apply() {
 			if (undo) patches.push(undo);
 		}
 	}
-	if (patches.length) return patches;
 
 	try {
 		const undo = spoofPremiumType();
-		if (undo) return [undo];
+		if (undo) patches.push(undo);
+		else diag.push("user spoof unavailable");
 	} catch (e: any) {
 		diag.push(`spoof error: ${e?.message ?? e}`);
 	}
 
-	const user = findByStoreName("UserStore")?.getCurrentUser?.();
-	const d = user && Object.getOwnPropertyDescriptor(user, "premiumType");
-	diag.push(`premiumType: ${d
-		? `writable=${d.writable} configurable=${d.configurable} getter=${!!d.get}`
-		: "no own descriptor"}`);
+	if (!patches.length) {
+		throw new Error(`Couldn't patch any emoji/Nitro checks. ${diag.join(" | ")}`);
+	}
 
-	throw new Error(`Couldn't patch Nitro checks or spoof Nitro. ${diag.join(" | ")}`);
+	return patches;
 }
