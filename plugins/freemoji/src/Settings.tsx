@@ -1,9 +1,11 @@
-import { ReactNative as RN } from "@vendetta/metro/common";
+import { ReactNative as RN, React } from "@vendetta/metro/common";
 import { Forms } from "@vendetta/ui/components";
 import { useProxy } from "@vendetta/storage";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import { storage } from "@vendetta/plugin";
 import { UNLOCK_NAMES, unlockKey } from "./unlocks";
+import { stats, resetStats } from "./stats";
+import { runScan } from "./scan";
 
 const sizeOptions = {
     Tiny: 16,
@@ -19,6 +21,7 @@ const previewUri = "https://cdn.discordapp.com/emojis/926602689213767680.webp";
 
 export default () => {
     useProxy(storage);
+    const [, refresh] = React.useReducer((x: number) => x + 1, 0);
 
     // Looked up at render time so a missing Forms export can't break plugin load
     const { FormSection, FormRadioRow, FormSwitchRow, FormRow, FormInput, FormIcon } = (Forms ?? {}) as any;
@@ -83,6 +86,29 @@ export default () => {
                         value={storage[unlockKey(name)] !== false}
                         onValueChange={(v: boolean) => { storage[unlockKey(name)] = v; }}
                         note=""
+                    />
+                ))}
+            </FormSection>
+            <FormSection title="Debug (temporary)">
+                <FormRow
+                    label="Refresh stats"
+                    subLabel="Reset first, open the emoji picker in a chat, then come back and refresh"
+                    onPress={() => refresh()}
+                />
+                <FormRow
+                    label="Reset stats"
+                    onPress={() => { resetStats(); refresh(); }}
+                />
+                <FormRow
+                    label="Scan emoji hooks"
+                    subLabel="Shows a list you can copy"
+                    onPress={() => runScan()}
+                />
+                {Object.entries(stats).map(([name, st]) => (
+                    <FormRow
+                        key={name}
+                        label={`${name}: ${st.calls} calls`}
+                        subLabel={`returned ${Object.entries(st.orig).map(([k, n]) => `${k} x${n}`).join(", ")} | arg0 ${st.arg0}`}
                     />
                 ))}
             </FormSection>
