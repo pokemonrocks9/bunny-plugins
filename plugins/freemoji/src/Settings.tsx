@@ -4,7 +4,9 @@ import { useProxy } from "@vendetta/storage";
 import { getAssetIDByName } from "@vendetta/ui/assets"
 import { storage } from "@vendetta/plugin";
 
-const { FormSection, FormRadioRow, FormSwitchRow } = Forms;
+export default () => {
+    useProxy(storage);
+    const { FormSection, FormRadioRow, FormSwitchRow } = (Forms ?? {}) as any;
 
 const sizeOptions = {
     Tiny: 16,
