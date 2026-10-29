@@ -1,22 +1,15 @@
 import { findByStoreName } from "@vendetta/metro";
 import { storage } from "@vendetta/plugin";
 import { Message } from "./def";
+import { hasRealNitro } from "./premium";
 
 // Keep the store objects (not destructured methods) so `this` stays intact,
 // and so a missing store doesn't throw at plugin load.
 const EmojiStore = findByStoreName("EmojiStore");
 const SelectedGuildStore = findByStoreName("SelectedGuildStore");
-const UserStore = findByStoreName("UserStore");
 
 // https://github.com/luimu64/nitro-spoof/blob/1bb75a2471c39669d590bfbabeb7b922672929f5/index.js#L25
 const emojiRegex = /<a?:(\w+):(\d+)>/gi;
-
-// premiumType: 0/undefined = none, 1 = Nitro Classic, 2 = Nitro, 3 = Nitro Basic.
-// Basic can NOT use external/animated emoji, so only 1 and 2 count as "real" Nitro here.
-function hasRealNitro(): boolean {
-	const type = UserStore?.getCurrentUser?.()?.premiumType;
-	return type === 1 || type === 2;
-}
 
 function convertUnusableEmojis(content: string, size: number): string {
 	const currentGuildId = SelectedGuildStore?.getGuildId?.();
