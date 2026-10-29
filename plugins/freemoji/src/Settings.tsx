@@ -3,6 +3,7 @@ import { Forms } from "@vendetta/ui/components";
 import { useProxy } from "@vendetta/storage";
 import { getAssetIDByName } from "@vendetta/ui/assets";
 import { storage } from "@vendetta/plugin";
+import { UNLOCK_NAMES, unlockKey } from "./unlocks";
 
 const sizeOptions = {
     Tiny: 16,
@@ -61,6 +62,27 @@ export default () => {
                         subLabel={String(size)}
                         selected={storage.emojiSize === size}
                         onPress={() => { storage.emojiSize = size; }}
+                    />
+                ))}
+            </FormSection>
+            <FormSection title="Advanced (turn the plugin off and on after changing)">
+                <FormSwitchRow
+                    label="Spoof Nitro on your account"
+                    subLabel="Client-side only. Quiets the Nitro upsell UI."
+                    leading={<FormIcon source={getAssetIDByName("img_nitro_emojis")} />}
+                    value={storage.spoofNitro !== false}
+                    onValueChange={(v: boolean) => { storage.spoofNitro = v; }}
+                    note=""
+                />
+                {UNLOCK_NAMES.map(name => (
+                    <FormSwitchRow
+                        key={name}
+                        label={name}
+                        subLabel="Emoji unlock patch. Turn off if the emoji picker crashes."
+                        leading={<FormIcon source={getAssetIDByName("img_nitro_emojis")} />}
+                        value={storage[unlockKey(name)] !== false}
+                        onValueChange={(v: boolean) => { storage[unlockKey(name)] = v; }}
+                        note=""
                     />
                 ))}
             </FormSection>
