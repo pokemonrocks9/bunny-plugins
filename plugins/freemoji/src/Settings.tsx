@@ -38,3 +38,41 @@ export default () => {
                     subLabel="Hyperlinks emoji link to be less distractive"
                     leading={<FormIcon source={getAssetIDByName("ic_link")} />}
                     value={storage.hyperlink}
+                    onValueChange={() => { storage.hyperlink = !storage.hyperlink; }}
+                    note=""
+                />
+                <FormRow
+                    label="Custom Hyperlink text"
+                    leading={<FormIcon source={getAssetIDByName("ic_link")} />}
+                />
+                <FormInput
+                    title=""
+                    placeholder="Put text here. Leave empty to use emoji's name."
+                    value={storage.customHyperLinkString}
+                    onChange={(x: string) => { storage.customHyperLinkString = x; }}
+                    style={{ marginTop: -25, marginHorizontal: 12 }}
+                />
+            </FormSection>
+            <FormSection title="Emoji Size">
+                {Object.entries(sizeOptions).map(([name, size]) => (
+                    <FormRadioRow
+                        key={name}
+                        label={name}
+                        subLabel={String(size)}
+                        selected={storage.emojiSize === size}
+                        onPress={() => { storage.emojiSize = size; }}
+                    />
+                ))}
+            </FormSection>
+            <FormSection title="Preview">
+                <RN.Image
+                    source={{
+                        uri: `${previewUri}?size=${storage.emojiSize}`,
+                        width: storage.emojiSize,
+                        height: storage.emojiSize,
+                    }}
+                />
+            </FormSection>
+        </RN.ScrollView>
+    );
+};
