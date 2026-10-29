@@ -14,7 +14,7 @@ function report(stage: string, e: any) {
 	try {
 		showConfirmationAlert({
 			title: `Freemoji: ${stage} failed`,
-			content: String(e?.stack ?? e),
+			content: String(e?.message ?? e),
 			confirmText: "OK",
 			onConfirm: () => {},
 		});
@@ -22,11 +22,20 @@ function report(stage: string, e: any) {
 }
 
 const patches: (() => void)[] = [];
+const counts: Record<string, number> = {};
+
 for (const [name, apply] of [["nitroChecks", nitroChecks], ["sendMessage", sendMessage]] as const) {
-	try { patches.push(...apply()); } catch (e) { report(name, e); }
+	try {
+		const applied = apply();
+		patches.push(...applied);
+		counts[name] = applied.length;
+	} catch (e) {
+		counts[name] = 0;
+		report(name, e);
+	}
 }
 
-try { showToast(`Freemoji loaded (${patches.length} patches)`); } catch {}
+try { showToast(`Freemoji: nitro ${counts.nitroChecks}, send ${counts.sendMessage}`); } catch {}
 
 export const onUnload = () => patches.forEach(p => p());
 export { default as settings } from "./Settings";
