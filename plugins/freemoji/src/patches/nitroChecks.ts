@@ -2,7 +2,8 @@ import { findByProps, findByPropsAll, findByStoreName } from "@vendetta/metro";
 import { storage } from "@vendetta/plugin";
 import { instead, after } from "@vendetta/patcher";
 import { setRealPremiumType, clearRealPremiumType } from "../premium";
-import { UNLOCK_NAMES, unlockKey } from "../unlocks";
+import { UNLOCK_NAMES, OBSERVE_NAMES, unlockKey } from "../unlocks";
+import { record } from "../stats";
 
 const NAMES = ["canUseEmojisEverywhere", "canUseAnimatedEmojis"];
 const SPOOFED_TYPE = 2;
@@ -22,10 +23,33 @@ function unlockEmojiChecks(diag: string[]): (() => void)[] {
 		try {
 			const mod = findByProps(name);
 			if (typeof mod?.[name] !== "function") { diag.push(`${name} not found`); continue; }
-			out.push(instead(name, mod, (args: any[], orig: (...a: any[]) => any) => unlockResult(orig(...args))));
+			out.push(instead(name, mod, (args: any[], orig: (...a: any[]) => any) => {
+				const ret = orig(...args);
+				try { record(name, args, ret); } catch {}
+				return unlockResult(ret);
+			}));
 		} catch (e: any) {
 			diag.push(`${name}: ${e?.message ?? e}`);
 		}
+	}
+	return out;
+}
+
+// TEMPORARY DEBUG: watch these without changing what they return.
+function observeFunctions(): (() => void)[] {
+	const out: (() => void)[] = [];
+	for (const name of OBSERVE_NAMES) {
+		try {
+			const mods = [...((findByPropsAll?.(name) as any[]) ?? [])];
+			for (const mod of mods) {
+				if (typeof mod?.[name] !== "function") continue;
+				out.push(instead(name, mod, (args: any[], orig: (...a: any[]) => any) => {
+					const ret = orig(...args);
+					try { record(name, args, ret); } catch {}
+					return ret;
+				}));
+			}
+		} catch {}
 	}
 	return out;
 }
@@ -95,6 +119,7 @@ function spoofPremiumType(): (() => void) | null {
 export default function apply() {
 	const diag: string[] = [];
 	const patches: (() => void)[] = [...unlockEmojiChecks(diag)];
+	const observers = observeFunctions();
 
 	for (const name of NAMES) {
 		const mods = [findByProps(name), ...((findByPropsAll?.(name) as any[]) ?? [])].filter(Boolean);
@@ -122,5 +147,6 @@ export default function apply() {
 	if (!patches.length && diag.length) {
 		throw new Error(`Couldn't patch any emoji/Nitro checks. ${diag.join(" | ")}`);
 	}
-	return patches;
+
+	return [...patches, ...observers];
 }
