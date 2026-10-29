@@ -122,6 +122,5 @@ export default function apply() {
 	if (!patches.length && diag.length) {
 		throw new Error(`Couldn't patch any emoji/Nitro checks. ${diag.join(" | ")}`);
 	}
-
 	return patches;
 }
