@@ -16,6 +16,74 @@ function unlockResult(ret: any) {
 	return ret;
 }
 
+type Fn = (...a: any[]) => any;
+
+// Return a copy of the emoji that looks like a normal static emoji from the current server.
+// Calling Discord's own checks with this gives their natural "usable" answer.
+function asLocalEmoji(emoji: any, guildId: any) {
+	if (!emoji || typeof emoji !== "object") return emoji;
+	return { ...emoji, guildId, animated: false };
+}
+
+// Called as ({ categoryEmojis, channel, guildId, intention }) and returns an object like
+// { emojisDisabled, emojisUnfiltered, emojisPremiumLockedCount, emojiNitroLocked }.
+// Instead of guessing what each field means, ask Discord again with the custom emoji
+// disguised as local ones, then swap the real emoji objects back into the answer.
+function reasonsPlural(args: any[], orig: Fn) {
+	const ret = orig(...args);
+	try { record("getEmojiUnavailableReasons", args, ret); } catch {}
+
+	try {
+		const arg = args[0];
+		const emojis = arg?.categoryEmojis;
+		if (!Array.isArray(emojis)) return ret;
+
+		const originals = new Map<any, any>();
+		const fakes = emojis.map((e: any) => {
+			if (!e || typeof e !== "object" || e.id == null) return e; // unicode emoji: leave alone
+			originals.set(e.id, e);
+			return asLocalEmoji(e, arg.guildId);
+		});
+
+		const fakeRet = orig({ ...arg, categoryEmojis: fakes });
+		if (!fakeRet || typeof fakeRet !== "object") return ret;
+
+		const restore = (v: any) =>
+			Array.isArray(v) ? v.map((x: any) => (x && x.id != null && originals.get(x.id)) || x) : v;
+
+		const out: any = {};
+		for (const k of Object.keys(fakeRet)) out[k] = restore(fakeRet[k]);
+		try { record("getEmojiUnavailableReasons -> out", args, out); } catch {}
+		return out;
+	} catch {
+		return ret;
+	}
+}
+
+// Called as ({ emoji, channel, intention, guildId }) when an emoji is tapped.
+// Returns a reason code (2 = premium locked) or the "no reason" value Discord uses.
+function reasonSingular(args: any[], orig: Fn) {
+	const ret = orig(...args);
+	try { record("getEmojiUnavailableReason", args, ret); } catch {}
+	if (ret == null) return ret;
+
+	try {
+		const arg = args[0];
+		if (arg?.emoji && typeof arg.emoji === "object") {
+			const fakeRet = orig({ ...arg, emoji: asLocalEmoji(arg.emoji, arg.guildId) });
+			try { record("getEmojiUnavailableReason -> out", args, fakeRet); } catch {}
+			return fakeRet;
+		}
+	} catch {}
+	return ret;
+}
+
+const CUSTOM: Record<string, (args: any[], orig: Fn) => any> = {
+	getEmojiUnavailableReasons: reasonsPlural,
+	getEmojiUnavailableReason: reasonSingular,
+};
+
+// Generic fallback for the plain boolean checks (the picker doesn't seem to call these directly).
 function unlockEmojiChecks(diag: string[]): (() => void)[] {
 	const out: (() => void)[] = [];
 	for (const name of UNLOCK_NAMES) {
@@ -23,11 +91,12 @@ function unlockEmojiChecks(diag: string[]): (() => void)[] {
 		try {
 			const mod = findByProps(name);
 			if (typeof mod?.[name] !== "function") { diag.push(`${name} not found`); continue; }
-			out.push(instead(name, mod, (args: any[], orig: (...a: any[]) => any) => {
+			const handler = CUSTOM[name] ?? ((args: any[], orig: Fn) => {
 				const ret = orig(...args);
 				try { record(name, args, ret); } catch {}
 				return unlockResult(ret);
-			}));
+			});
+			out.push(instead(name, mod, handler));
 		} catch (e: any) {
 			diag.push(`${name}: ${e?.message ?? e}`);
 		}
