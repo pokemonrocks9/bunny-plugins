@@ -4,11 +4,28 @@
 type Stat = { calls: number; orig: Record<string, number>; arg0?: string };
 export const stats: Record<string, Stat> = {};
 
+function short(v: any): string {
+	if (v === null) return "null";
+	if (v === undefined) return "undef";
+	if (Array.isArray(v)) return `[${v.length}]`;
+	if (typeof v === "object") return "{..}";
+	if (typeof v === "string") return "str";
+	return String(v);
+}
+
 export function describe(v: any): string {
 	if (v === null) return "null";
 	if (v === undefined) return "undefined";
 	if (Array.isArray(v)) return `array(${v.length})`;
-	if (typeof v === "object") return `{${Object.keys(v).slice(0, 7).join(",")}}`;
+	if (typeof v === "object") {
+		const parts: string[] = [];
+		for (const k of Object.keys(v).slice(0, 8)) {
+			let val: any;
+			try { val = v[k]; } catch { val = "?"; }
+			parts.push(`${k}:${short(val)}`);
+		}
+		return `{${parts.join(",")}}`;
+	}
 	return `${typeof v}:${String(v).slice(0, 16)}`;
 }
 
