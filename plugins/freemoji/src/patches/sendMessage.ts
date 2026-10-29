@@ -28,4 +28,4 @@ if (uploadModule && uploadModule.uploadLocalFiles) {
     );
 }
 
-export default patches; 
+export default patches;
