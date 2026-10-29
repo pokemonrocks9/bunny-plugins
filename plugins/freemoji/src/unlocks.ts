@@ -10,4 +10,12 @@ export const UNLOCK_NAMES = [
 	"getEmojiUnavailableReasons",
 ];
 
+// TEMPORARY DEBUG: watched (call + return value recorded) but never changed.
+export const OBSERVE_NAMES = [
+	"getEmojiUnavailableReason",
+	"filterUnsupportedEmojis",
+	"isUnusableRoleSubscriptionEmoji",
+	"isEmojiEmpty",
+];
+
 export const unlockKey = (name: string) => `unlock_${name}`;
