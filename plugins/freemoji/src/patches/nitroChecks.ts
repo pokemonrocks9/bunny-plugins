@@ -18,6 +18,16 @@ function unlockResult(ret: any) {
 
 type Fn = (...a: any[]) => any;
 
+const SelectedGuildStore = findByStoreName("SelectedGuildStore");
+
+// The tap-time check doesn't always pass guildId, so fall back to the channel or the open server.
+function guildOf(arg: any) {
+	return arg?.guildId
+		?? arg?.channel?.guild_id
+		?? arg?.channel?.guildId
+		?? SelectedGuildStore?.getGuildId?.();
+}
+
 // Return a copy of the emoji that looks like a normal static emoji from the current server.
 // Calling Discord's own checks with this gives their natural "usable" answer.
 function asLocalEmoji(emoji: any, guildId: any) {
@@ -42,7 +52,7 @@ function reasonsPlural(args: any[], orig: Fn) {
 		const fakes = emojis.map((e: any) => {
 			if (!e || typeof e !== "object" || e.id == null) return e; // unicode emoji: leave alone
 			originals.set(e.id, e);
-			return asLocalEmoji(e, arg.guildId);
+			return asLocalEmoji(e, guildOf(arg));
 		});
 
 		const fakeRet = orig({ ...arg, categoryEmojis: fakes });
@@ -61,18 +71,39 @@ function reasonsPlural(args: any[], orig: Fn) {
 }
 
 // Called as ({ emoji, channel, intention, guildId }) when an emoji is tapped.
-// Returns a reason code (2 = premium locked) or the "no reason" value Discord uses.
+// Returns a reason code (2 = premium locked) or Discord's "no reason" value.
+let noneValue: any = null;
+let haveNone = false;
+
+// Ask about a plain unicode emoji (always usable) to learn what "no reason" looks like
+// in this Discord build (null vs undefined), then reuse it.
+function learnNone(arg: any, orig: Fn) {
+	if (haveNone) return noneValue;
+	try {
+		const r = orig({ ...arg, emoji: { name: "grinning", surrogates: "\u{1F600}" } });
+		if (r == null) { noneValue = r; haveNone = true; }
+	} catch {}
+	return noneValue;
+}
+
 function reasonSingular(args: any[], orig: Fn) {
 	const ret = orig(...args);
 	try { record("getEmojiUnavailableReason", args, ret); } catch {}
-	if (ret == null) return ret;
+	if (ret == null) { noneValue = ret; haveNone = true; return ret; }
 
 	try {
 		const arg = args[0];
 		if (arg?.emoji && typeof arg.emoji === "object") {
-			const fakeRet = orig({ ...arg, emoji: asLocalEmoji(arg.emoji, arg.guildId) });
-			try { record("getEmojiUnavailableReason -> out", args, fakeRet); } catch {}
-			return fakeRet;
+			const guildId = guildOf(arg);
+			const fakeRet = orig({ ...arg, guildId, emoji: asLocalEmoji(arg.emoji, guildId) });
+			if (fakeRet == null) {
+				try { record("getEmojiUnavailableReason -> out", args, fakeRet); } catch {}
+				return fakeRet;
+			}
+			// Still blocked for some reason: report "no reason" the way Discord itself does
+			const none = learnNone(arg, orig);
+			try { record("getEmojiUnavailableReason -> none", args, none); } catch {}
+			return none;
 		}
 	} catch {}
 	return ret;
