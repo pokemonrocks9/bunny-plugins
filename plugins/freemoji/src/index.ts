@@ -8,14 +8,10 @@ storage.hyperlink ??= true;
 storage.forceMoji ??= false;
 storage.customHyperLinkString ??= "";
 
-// Migration code, used to be string containing a number but is now just a number
+// emojiSize used to be a string containing a number
 if (typeof storage.emojiSize === "string") storage.emojiSize = parseInt(storage.emojiSize);
 
-// NOTE: `storage.haveNitro` is gone. It used to be computed once with a broken check and persisted,
-// so it stuck at `true` for non-Nitro users. Nitro status is now checked live (see premium.ts).
-// Any leftover `haveNitro` key in old storage is simply ignored.
-
-// Show on-screen what failed instead of silently doing nothing (there's no log viewer on mobile)
+// Mobile has no easy log viewer, so surface load failures on screen
 function report(stage: string, e: any) {
 	try {
 		showConfirmationAlert({
@@ -29,7 +25,7 @@ function report(stage: string, e: any) {
 
 const patches: (() => void)[] = [];
 
-// One failing patch group must not stop the others (or the plugin) from loading
+// A failing patch group must not stop the others from loading
 for (const [name, apply] of [["nitroChecks", nitroChecks], ["sendMessage", sendMessage]] as const) {
 	try {
 		patches.push(...apply());
