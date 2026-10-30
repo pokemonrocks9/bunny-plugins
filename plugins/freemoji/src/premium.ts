@@ -2,28 +2,14 @@ import { findByStoreName } from "@vendetta/metro";
 
 const UserStore = findByStoreName("UserStore");
 
-// premiumType: 0/undefined = none, 1 = Nitro Classic, 2 = Nitro, 3 = Nitro Basic.
-// When the Nitro spoof is active the live value reads as 2, so the real value is
-// captured before spoofing and kept here.
-let captured = false;
-let capturedType: number | undefined;
+// While the Nitro spoof is active the live premiumType reads 2, so the real value is kept here.
+let real: { type: number | undefined } | null = null;
 
-export function setRealPremiumType(t: number | undefined) {
-	captured = true;
-	capturedType = t;
-}
+export const setRealPremiumType = (type: number | undefined) => { real = { type }; };
+export const clearRealPremiumType = () => { real = null; };
 
-export function clearRealPremiumType() {
-	captured = false;
-	capturedType = undefined;
-}
-
-export function getRealPremiumType(): number | undefined {
-	return captured ? capturedType : UserStore?.getCurrentUser?.()?.premiumType;
-}
-
-// Basic (3) can't use external emoji, so only Classic (1) and full Nitro (2) count.
+// premiumType: 1 = Nitro Classic, 2 = Nitro, 3 = Nitro Basic. Basic can't use external emoji.
 export function hasRealNitro(): boolean {
-	const t = getRealPremiumType();
-	return t === 1 || t === 2;
+	const type = real ? real.type : UserStore?.getCurrentUser?.()?.premiumType;
+	return type === 1 || type === 2;
 }
