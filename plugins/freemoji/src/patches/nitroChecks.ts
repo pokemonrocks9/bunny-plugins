@@ -2,23 +2,31 @@ import { findByProps, findByPropsAll, findByStoreName } from "@vendetta/metro";
 import { storage } from "@vendetta/plugin";
 import { instead, after } from "@vendetta/patcher";
 import { setRealPremiumType, clearRealPremiumType } from "../premium";
-import { UNLOCK_NAMES, OBSERVE_NAMES, unlockKey } from "../unlocks";
-import { record } from "../stats";
 
-const NAMES = ["canUseEmojisEverywhere", "canUseAnimatedEmojis"];
+type Fn = (...a: any[]) => any;
+
 const SPOOFED_TYPE = 2;
+const SelectedGuildStore = findByStoreName("SelectedGuildStore");
 
-// Keep the shape Discord expects: booleans become false, arrays become empty,
-// anything else is returned untouched.
+// Older Discord builds expose these; newer ones freeze them, in which case forceTrue does nothing.
+const CAN_USE_NAMES = ["canUseEmojisEverywhere", "canUseAnimatedEmojis"];
+
+// Plain boolean/array lock checks. The current emoji picker doesn't call these directly,
+// but other Discord builds and screens do, so they stay patched.
+const SIMPLE_UNLOCKS = [
+	"isEmojiPremiumLocked",
+	"isEmojiCategoryNitroLocked",
+	"isEmojiFilteredOrLocked",
+	"isEmojiFiltered",
+	"isEmojiDisabled",
+];
+
+// Booleans become false, arrays become empty, anything else is returned untouched.
 function unlockResult(ret: any) {
 	if (typeof ret === "boolean") return false;
 	if (Array.isArray(ret)) return [];
 	return ret;
 }
-
-type Fn = (...a: any[]) => any;
-
-const SelectedGuildStore = findByStoreName("SelectedGuildStore");
 
 // The tap-time check doesn't always pass guildId, so fall back to the channel or the open server.
 // An explicit null (DMs) is kept as null.
@@ -29,7 +37,7 @@ function guildOf(arg: any) {
 		?? SelectedGuildStore?.getGuildId?.();
 }
 
-// Return a copy of the emoji that looks like a normal static emoji from the current server.
+// Copy of the emoji that looks like a normal static emoji from the current server.
 // Calling Discord's own checks with this gives their natural "usable" answer.
 function asLocalEmoji(emoji: any, guildId: any) {
 	if (!emoji || typeof emoji !== "object") return emoji;
@@ -62,13 +70,12 @@ function neutralize(r: any) {
 	return o;
 }
 
-// Called as ({ categoryEmojis, channel, guildId, intention }) and returns an object like
+// Called by the emoji picker as ({ categoryEmojis, channel, guildId, intention }); returns an object
 // { emojisDisabled, emojisUnfiltered, emojisPremiumLockedCount, emojiNitroLocked }.
 // Ask Discord again with the custom emoji disguised as local ones, swap the real emoji objects
 // back into the answer, and clear any lock fields that are still set.
 function reasonsPlural(args: any[], orig: Fn) {
 	const ret = orig(...args);
-	try { record("getEmojiUnavailableReasons", args, ret); } catch {}
 
 	try {
 		const arg = args[0];
@@ -92,16 +99,12 @@ function reasonsPlural(args: any[], orig: Fn) {
 		const restored: any = {};
 		for (const k of Object.keys(fakeRet)) restored[k] = restore(fakeRet[k]);
 
-		const out = neutralize(restored);
-		try { record("getEmojiUnavailableReasons -> out", args, out); } catch {}
-		return out;
+		return neutralize(restored);
 	} catch {
 		return ret;
 	}
 }
 
-// Called as ({ emoji, channel, intention, guildId }) when an emoji is tapped.
-// Returns a reason code (2 = premium locked) or Discord's "no reason" value.
 let noneValue: any = null;
 let haveNone = false;
 
@@ -116,9 +119,10 @@ function learnNone(arg: any, orig: Fn) {
 	return noneValue;
 }
 
+// Called when an emoji is tapped, as ({ emoji, channel, intention, guildId }).
+// Returns a reason code (2 = premium locked) or Discord's "no reason" value.
 function reasonSingular(args: any[], orig: Fn) {
 	const ret = orig(...args);
-	try { record("getEmojiUnavailableReason", args, ret); } catch {}
 	if (ret == null) { noneValue = ret; haveNone = true; return ret; }
 
 	try {
@@ -126,14 +130,9 @@ function reasonSingular(args: any[], orig: Fn) {
 		if (arg?.emoji && typeof arg.emoji === "object") {
 			const guildId = guildOf(arg);
 			const fakeRet = orig({ ...arg, guildId, emoji: asLocalEmoji(arg.emoji, guildId) });
-			if (fakeRet == null) {
-				try { record("getEmojiUnavailableReason -> out", args, fakeRet); } catch {}
-				return fakeRet;
-			}
-			// Still blocked for some reason: report "no reason" the way Discord itself does
-			const none = learnNone(arg, orig);
-			try { record("getEmojiUnavailableReason -> none", args, none); } catch {}
-			return none;
+			if (fakeRet == null) return fakeRet;
+			// Still blocked: report "no reason" the way Discord itself does
+			return learnNone(arg, orig);
 		}
 	} catch {}
 	return ret;
@@ -144,19 +143,15 @@ const CUSTOM: Record<string, (args: any[], orig: Fn) => any> = {
 	getEmojiUnavailableReason: reasonSingular,
 };
 
-// Generic fallback for the plain boolean checks (the picker doesn't seem to call these directly).
 function unlockEmojiChecks(diag: string[]): (() => void)[] {
 	const out: (() => void)[] = [];
-	for (const name of UNLOCK_NAMES) {
-		if (storage[unlockKey(name)] === false) continue; // switched off in settings
+	if (storage.unlockPicker === false) return out; // switched off in settings
+
+	for (const name of [...Object.keys(CUSTOM), ...SIMPLE_UNLOCKS]) {
 		try {
 			const mod = findByProps(name);
 			if (typeof mod?.[name] !== "function") { diag.push(`${name} not found`); continue; }
-			const handler = CUSTOM[name] ?? ((args: any[], orig: Fn) => {
-				const ret = orig(...args);
-				try { record(name, args, ret); } catch {}
-				return unlockResult(ret);
-			});
+			const handler = CUSTOM[name] ?? ((args: any[], orig: Fn) => unlockResult(orig(...args)));
 			out.push(instead(name, mod, handler));
 		} catch (e: any) {
 			diag.push(`${name}: ${e?.message ?? e}`);
@@ -165,27 +160,7 @@ function unlockEmojiChecks(diag: string[]): (() => void)[] {
 	return out;
 }
 
-// TEMPORARY DEBUG: watch these without changing what they return.
-function observeFunctions(): (() => void)[] {
-	const out: (() => void)[] = [];
-	for (const name of OBSERVE_NAMES) {
-		try {
-			const mods = [...((findByPropsAll?.(name) as any[]) ?? [])];
-			for (const mod of mods) {
-				if (typeof mod?.[name] !== "function") continue;
-				out.push(instead(name, mod, (args: any[], orig: (...a: any[]) => any) => {
-					const ret = orig(...args);
-					try { record(name, args, ret); } catch {}
-					return ret;
-				}));
-			}
-		} catch {}
-	}
-	return out;
-}
-
 // Older Discord builds: force the canUse* functions to return true.
-// Newer builds freeze these exports (writable=false configurable=false), so this does nothing there.
 function forceTrue(obj: any, name: string): (() => void) | null {
 	if (typeof obj?.[name] !== "function") return null;
 	const desc = Object.getOwnPropertyDescriptor(obj, name);
@@ -249,9 +224,8 @@ function spoofPremiumType(): (() => void) | null {
 export default function apply() {
 	const diag: string[] = [];
 	const patches: (() => void)[] = [...unlockEmojiChecks(diag)];
-	const observers = observeFunctions();
 
-	for (const name of NAMES) {
+	for (const name of CAN_USE_NAMES) {
 		const mods = [findByProps(name), ...((findByPropsAll?.(name) as any[]) ?? [])].filter(Boolean);
 		const seen = new Set<any>();
 
@@ -278,5 +252,5 @@ export default function apply() {
 		throw new Error(`Couldn't patch any emoji/Nitro checks. ${diag.join(" | ")}`);
 	}
 
-	return [...patches, ...observers];
+	return patches;
 }
