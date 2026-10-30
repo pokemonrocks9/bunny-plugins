@@ -21,9 +21,10 @@ type Fn = (...a: any[]) => any;
 const SelectedGuildStore = findByStoreName("SelectedGuildStore");
 
 // The tap-time check doesn't always pass guildId, so fall back to the channel or the open server.
+// An explicit null (DMs) is kept as null.
 function guildOf(arg: any) {
-	return arg?.guildId
-		?? arg?.channel?.guild_id
+	if (arg?.guildId !== undefined) return arg.guildId;
+	return arg?.channel?.guild_id
 		?? arg?.channel?.guildId
 		?? SelectedGuildStore?.getGuildId?.();
 }
@@ -35,10 +36,36 @@ function asLocalEmoji(emoji: any, guildId: any) {
 	return { ...emoji, guildId, animated: false };
 }
 
+// "Empty" version of a value of the same kind, or the value itself if we don't recognise it.
+function emptyLike(v: any) {
+	if (typeof v === "boolean") return false;
+	if (typeof v === "number") return 0;
+	if (Array.isArray(v)) return [];
+	if (v instanceof Set) return new Set();
+	if (v instanceof Map) return new Map();
+	if (v && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) return {};
+	return v;
+}
+
+// Fallback for when disguising the emoji didn't unlock them (DMs have no server to disguise
+// them as part of): if the result still says locked, clear the lock fields directly.
+function neutralize(r: any) {
+	if (!r || typeof r !== "object") return r;
+	const stillLocked = r.emojiNitroLocked === true
+		|| (typeof r.emojisPremiumLockedCount === "number" && r.emojisPremiumLockedCount > 0);
+	if (!stillLocked) return r;
+
+	const o: any = { ...r };
+	if ("emojiNitroLocked" in o) o.emojiNitroLocked = false;
+	if ("emojisPremiumLockedCount" in o) o.emojisPremiumLockedCount = emptyLike(o.emojisPremiumLockedCount);
+	if ("emojisDisabled" in o) o.emojisDisabled = emptyLike(o.emojisDisabled);
+	return o;
+}
+
 // Called as ({ categoryEmojis, channel, guildId, intention }) and returns an object like
 // { emojisDisabled, emojisUnfiltered, emojisPremiumLockedCount, emojiNitroLocked }.
-// Instead of guessing what each field means, ask Discord again with the custom emoji
-// disguised as local ones, then swap the real emoji objects back into the answer.
+// Ask Discord again with the custom emoji disguised as local ones, swap the real emoji objects
+// back into the answer, and clear any lock fields that are still set.
 function reasonsPlural(args: any[], orig: Fn) {
 	const ret = orig(...args);
 	try { record("getEmojiUnavailableReasons", args, ret); } catch {}
@@ -46,23 +73,26 @@ function reasonsPlural(args: any[], orig: Fn) {
 	try {
 		const arg = args[0];
 		const emojis = arg?.categoryEmojis;
-		if (!Array.isArray(emojis)) return ret;
+		if (!Array.isArray(emojis)) return neutralize(ret);
 
 		const originals = new Map<any, any>();
+		const guildId = guildOf(arg);
 		const fakes = emojis.map((e: any) => {
 			if (!e || typeof e !== "object" || e.id == null) return e; // unicode emoji: leave alone
 			originals.set(e.id, e);
-			return asLocalEmoji(e, guildOf(arg));
+			return asLocalEmoji(e, guildId);
 		});
 
 		const fakeRet = orig({ ...arg, categoryEmojis: fakes });
-		if (!fakeRet || typeof fakeRet !== "object") return ret;
+		if (!fakeRet || typeof fakeRet !== "object") return neutralize(ret);
 
 		const restore = (v: any) =>
 			Array.isArray(v) ? v.map((x: any) => (x && x.id != null && originals.get(x.id)) || x) : v;
 
-		const out: any = {};
-		for (const k of Object.keys(fakeRet)) out[k] = restore(fakeRet[k]);
+		const restored: any = {};
+		for (const k of Object.keys(fakeRet)) restored[k] = restore(fakeRet[k]);
+
+		const out = neutralize(restored);
 		try { record("getEmojiUnavailableReasons -> out", args, out); } catch {}
 		return out;
 	} catch {
