@@ -67,7 +67,7 @@ export default () => {
             <FormSection title="Advanced (turn the plugin off and on after changing)">
                 <FormSwitchRow
                     label="Unlock emoji picker"
-                    subLabel="Lets you pick emoji from other servers. Turn off if the picker misbehaves after a Discord update."
+                    subLabel="Lets you pick emoji from other servers in chat. Turn off if the picker misbehaves after a Discord update."
                     leading={<FormIcon source={getAssetIDByName("img_nitro_emojis")} />}
                     value={storage.unlockPicker !== false}
                     onValueChange={(v: boolean) => { storage.unlockPicker = v; }}
