@@ -11,22 +11,10 @@ const SelectedGuildStore = findByStoreName("SelectedGuildStore");
 // Older Discord builds expose these; newer ones freeze them, in which case forceTrue does nothing.
 const CAN_USE_NAMES = ["canUseEmojisEverywhere", "canUseAnimatedEmojis"];
 
-// Plain boolean/array lock checks. The current emoji picker doesn't call these directly,
-// but other Discord builds and screens do, so they stay patched.
-const SIMPLE_UNLOCKS = [
-	"isEmojiPremiumLocked",
-	"isEmojiCategoryNitroLocked",
-	"isEmojiFilteredOrLocked",
-	"isEmojiFiltered",
-	"isEmojiDisabled",
-];
-
-// Booleans become false, arrays become empty, anything else is returned untouched.
-function unlockResult(ret: any) {
-	if (typeof ret === "boolean") return false;
-	if (Array.isArray(ret)) return [];
-	return ret;
-}
+// Discord tags every emoji lookup with what the emoji is for. The chat picker uses 3 in servers
+// and DMs (seen in testing). Reactions, statuses etc. use other values and stay locked, because
+// the server rejects external emoji there no matter what the client says.
+const CHAT_INTENTION = 3;
 
 // The tap-time check doesn't always pass guildId, so fall back to the channel or the open server.
 // An explicit null (DMs) is kept as null.
@@ -76,6 +64,7 @@ function neutralize(r: any) {
 // back into the answer, and clear any lock fields that are still set.
 function reasonsPlural(args: any[], orig: Fn) {
 	const ret = orig(...args);
+	if (args[0]?.intention !== CHAT_INTENTION) return ret;
 
 	try {
 		const arg = args[0];
@@ -124,6 +113,7 @@ function learnNone(arg: any, orig: Fn) {
 function reasonSingular(args: any[], orig: Fn) {
 	const ret = orig(...args);
 	if (ret == null) { noneValue = ret; haveNone = true; return ret; }
+	if (args[0]?.intention !== CHAT_INTENTION) return ret;
 
 	try {
 		const arg = args[0];
@@ -147,11 +137,10 @@ function unlockEmojiChecks(diag: string[]): (() => void)[] {
 	const out: (() => void)[] = [];
 	if (storage.unlockPicker === false) return out; // switched off in settings
 
-	for (const name of [...Object.keys(CUSTOM), ...SIMPLE_UNLOCKS]) {
+	for (const [name, handler] of Object.entries(CUSTOM)) {
 		try {
 			const mod = findByProps(name);
 			if (typeof mod?.[name] !== "function") { diag.push(`${name} not found`); continue; }
-			const handler = CUSTOM[name] ?? ((args: any[], orig: Fn) => unlockResult(orig(...args)));
 			out.push(instead(name, mod, handler));
 		} catch (e: any) {
 			diag.push(`${name}: ${e?.message ?? e}`);
