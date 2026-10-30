@@ -1,23 +1,15 @@
-import { findByProps, findByPropsAll, findByStoreName } from "@vendetta/metro";
+import { findByProps, findByStoreName } from "@vendetta/metro";
 import { storage } from "@vendetta/plugin";
 import { instead, after } from "@vendetta/patcher";
 import { setRealPremiumType, clearRealPremiumType } from "../premium";
 
 type Fn = (...a: any[]) => any;
 
-const SPOOFED_TYPE = 2;
-const SelectedGuildStore = findByStoreName("SelectedGuildStore");
-
-// Older Discord builds expose these; newer ones freeze them, in which case forceTrue does nothing.
-const CAN_USE_NAMES = ["canUseEmojisEverywhere", "canUseAnimatedEmojis"];
-
-// Discord tags every emoji lookup with what the emoji is for. The chat picker uses 3 in servers
-// and DMs (seen in testing). Reactions, statuses etc. use other values and stay locked, because
-// the server rejects external emoji there no matter what the client says.
+const SPOOFED_PREMIUM_TYPE = 2;
 const CHAT_INTENTION = 3;
 
-// The tap-time check doesn't always pass guildId, so fall back to the channel or the open server.
-// An explicit null (DMs) is kept as null.
+const SelectedGuildStore = findByStoreName("SelectedGuildStore");
+const UserStore = findByStoreName("UserStore");
 function guildOf(arg: any) {
 	if (arg?.guildId !== undefined) return arg.guildId;
 	return arg?.channel?.guild_id
@@ -25,14 +17,11 @@ function guildOf(arg: any) {
 		?? SelectedGuildStore?.getGuildId?.();
 }
 
-// Copy of the emoji that looks like a normal static emoji from the current server.
-// Calling Discord's own checks with this gives their natural "usable" answer.
 function asLocalEmoji(emoji: any, guildId: any) {
 	if (!emoji || typeof emoji !== "object") return emoji;
 	return { ...emoji, guildId, animated: false };
 }
 
-// "Empty" version of a value of the same kind, or the value itself if we don't recognise it.
 function emptyLike(v: any) {
 	if (typeof v === "boolean") return false;
 	if (typeof v === "number") return 0;
@@ -41,40 +30,32 @@ function emptyLike(v: any) {
 	if (v instanceof Map) return new Map();
 	if (v && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype) return {};
 	return v;
-}
 
-// Fallback for when disguising the emoji didn't unlock them (DMs have no server to disguise
-// them as part of): if the result still says locked, clear the lock fields directly.
 function neutralize(r: any) {
 	if (!r || typeof r !== "object") return r;
-	const stillLocked = r.emojiNitroLocked === true
+	const locked = r.emojiNitroLocked === true
 		|| (typeof r.emojisPremiumLockedCount === "number" && r.emojisPremiumLockedCount > 0);
-	if (!stillLocked) return r;
+	if (!locked) return r;
 
-	const o: any = { ...r };
-	if ("emojiNitroLocked" in o) o.emojiNitroLocked = false;
-	if ("emojisPremiumLockedCount" in o) o.emojisPremiumLockedCount = emptyLike(o.emojisPremiumLockedCount);
-	if ("emojisDisabled" in o) o.emojisDisabled = emptyLike(o.emojisDisabled);
-	return o;
+	const out: any = { ...r };
+	if ("emojiNitroLocked" in out) out.emojiNitroLocked = false;
+	if ("emojisPremiumLockedCount" in out) out.emojisPremiumLockedCount = emptyLike(out.emojisPremiumLockedCount);
+	if ("emojisDisabled" in out) out.emojisDisabled = emptyLike(out.emojisDisabled);
+	return out;
 }
 
-// Called by the emoji picker as ({ categoryEmojis, channel, guildId, intention }); returns an object
-// { emojisDisabled, emojisUnfiltered, emojisPremiumLockedCount, emojiNitroLocked }.
-// Ask Discord again with the custom emoji disguised as local ones, swap the real emoji objects
-// back into the answer, and clear any lock fields that are still set.
 function reasonsPlural(args: any[], orig: Fn) {
 	const ret = orig(...args);
 	if (args[0]?.intention !== CHAT_INTENTION) return ret;
 
 	try {
 		const arg = args[0];
-		const emojis = arg?.categoryEmojis;
-		if (!Array.isArray(emojis)) return neutralize(ret);
+		if (!Array.isArray(arg.categoryEmojis)) return neutralize(ret);
 
 		const originals = new Map<any, any>();
 		const guildId = guildOf(arg);
-		const fakes = emojis.map((e: any) => {
-			if (!e || typeof e !== "object" || e.id == null) return e; // unicode emoji: leave alone
+		const fakes = arg.categoryEmojis.map((e: any) => {
+			if (!e || typeof e !== "object" || e.id == null) return e; // unicode emoji
 			originals.set(e.id, e);
 			return asLocalEmoji(e, guildId);
 		});
@@ -82,34 +63,31 @@ function reasonsPlural(args: any[], orig: Fn) {
 		const fakeRet = orig({ ...arg, categoryEmojis: fakes });
 		if (!fakeRet || typeof fakeRet !== "object") return neutralize(ret);
 
-		const restore = (v: any) =>
-			Array.isArray(v) ? v.map((x: any) => (x && x.id != null && originals.get(x.id)) || x) : v;
-
 		const restored: any = {};
-		for (const k of Object.keys(fakeRet)) restored[k] = restore(fakeRet[k]);
-
+		for (const k of Object.keys(fakeRet)) {
+			const v = fakeRet[k];
+			restored[k] = Array.isArray(v) ? v.map((x: any) => (x && x.id != null && originals.get(x.id)) || x) : v;
+		}
 		return neutralize(restored);
 	} catch {
 		return ret;
 	}
 }
 
+// Whether "no reason" is null or undefined differs between builds, so learn it from Discord.
 let noneValue: any = null;
 let haveNone = false;
 
-// Ask about a plain unicode emoji (always usable) to learn what "no reason" looks like
-// in this Discord build (null vs undefined), then reuse it.
 function learnNone(arg: any, orig: Fn) {
 	if (haveNone) return noneValue;
 	try {
+		// A plain unicode emoji is always usable
 		const r = orig({ ...arg, emoji: { name: "grinning", surrogates: "\u{1F600}" } });
 		if (r == null) { noneValue = r; haveNone = true; }
 	} catch {}
 	return noneValue;
 }
 
-// Called when an emoji is tapped, as ({ emoji, channel, intention, guildId }).
-// Returns a reason code (2 = premium locked) or Discord's "no reason" value.
 function reasonSingular(args: any[], orig: Fn) {
 	const ret = orig(...args);
 	if (ret == null) { noneValue = ret; haveNone = true; return ret; }
@@ -120,24 +98,22 @@ function reasonSingular(args: any[], orig: Fn) {
 		if (arg?.emoji && typeof arg.emoji === "object") {
 			const guildId = guildOf(arg);
 			const fakeRet = orig({ ...arg, guildId, emoji: asLocalEmoji(arg.emoji, guildId) });
-			if (fakeRet == null) return fakeRet;
-			// Still blocked: report "no reason" the way Discord itself does
-			return learnNone(arg, orig);
+			return fakeRet == null ? fakeRet : learnNone(arg, orig);
 		}
 	} catch {}
 	return ret;
 }
 
-const CUSTOM: Record<string, (args: any[], orig: Fn) => any> = {
+const PICKER_PATCHES: Record<string, (args: any[], orig: Fn) => any> = {
 	getEmojiUnavailableReasons: reasonsPlural,
 	getEmojiUnavailableReason: reasonSingular,
 };
 
-function unlockEmojiChecks(diag: string[]): (() => void)[] {
+function unlockPicker(diag: string[]): (() => void)[] {
 	const out: (() => void)[] = [];
-	if (storage.unlockPicker === false) return out; // switched off in settings
+	if (storage.unlockPicker === false) return out;
 
-	for (const [name, handler] of Object.entries(CUSTOM)) {
+	for (const [name, handler] of Object.entries(PICKER_PATCHES)) {
 		try {
 			const mod = findByProps(name);
 			if (typeof mod?.[name] !== "function") { diag.push(`${name} not found`); continue; }
@@ -149,57 +125,36 @@ function unlockEmojiChecks(diag: string[]): (() => void)[] {
 	return out;
 }
 
-// Older Discord builds: force the canUse* functions to return true.
-function forceTrue(obj: any, name: string): (() => void) | null {
-	if (typeof obj?.[name] !== "function") return null;
-	const desc = Object.getOwnPropertyDescriptor(obj, name);
-
-	if (!desc || desc.writable) {
-		try { return instead(name, obj, () => true); } catch {}
-	}
-
-	if (desc?.configurable) {
-		try {
-			Object.defineProperty(obj, name, {
-				value: () => true,
-				writable: true,
-				configurable: true,
-				enumerable: desc.enumerable,
-			});
-			return () => { try { Object.defineProperty(obj, name, desc); } catch {} };
-		} catch {}
-	}
-
-	return null;
+function forceTrue(name: string): (() => void) | null {
+	const mod = findByProps(name);
+	if (typeof mod?.[name] !== "function") return null;
+	try { return instead(name, mod, () => true); } catch { return null; }
 }
 
-// Make the client believe the current user has Nitro (quiets the upsell UI).
-function spoofPremiumType(): (() => void) | null {
-	const UserStore = findByStoreName("UserStore");
+function spoofNitro(): (() => void) | null {
 	const user = UserStore?.getCurrentUser?.();
 	if (!user) return null;
 
 	const real = user.premiumType;
-	if (real === 1 || real === 2) return () => {}; // real Nitro, nothing to spoof
+	if (real === 1 || real === 2) return () => {}; // already has Nitro
 
 	setRealPremiumType(real);
 
 	const touched = new Set<any>();
-	const setType = (u: any) => {
-		if (u && typeof u === "object" && u.premiumType !== SPOOFED_TYPE) {
-			try { u.premiumType = SPOOFED_TYPE; touched.add(u); } catch {}
+	const spoof = (u: any) => {
+		if (u && typeof u === "object" && u.premiumType !== SPOOFED_PREMIUM_TYPE) {
+			try { u.premiumType = SPOOFED_PREMIUM_TYPE; touched.add(u); } catch {}
 		}
 	};
 
-	setType(user);
-	if (user.premiumType !== SPOOFED_TYPE) {
+	spoof(user);
+	if (user.premiumType !== SPOOFED_PREMIUM_TYPE) {
 		clearRealPremiumType();
 		return null;
 	}
 
-	// Discord may replace the user record later; re-apply to whatever it returns
 	const unpatch = after("getCurrentUser", UserStore, (_args: any, ret: any) => {
-		setType(ret);
+		spoof(ret);
 		return ret;
 	});
 
@@ -212,28 +167,20 @@ function spoofPremiumType(): (() => void) | null {
 
 export default function apply() {
 	const diag: string[] = [];
-	const patches: (() => void)[] = [...unlockEmojiChecks(diag)];
+	const patches = unlockPicker(diag);
 
-	for (const name of CAN_USE_NAMES) {
-		const mods = [findByProps(name), ...((findByPropsAll?.(name) as any[]) ?? [])].filter(Boolean);
-		const seen = new Set<any>();
-
-		for (const mod of mods) {
-			if (seen.has(mod)) continue;
-			seen.add(mod);
-
-			const undo = forceTrue(mod, name);
-			if (undo) patches.push(undo);
-		}
+	for (const name of ["canUseEmojisEverywhere", "canUseAnimatedEmojis"]) {
+		const undo = forceTrue(name);
+		if (undo) patches.push(undo);
 	}
 
 	if (storage.spoofNitro !== false) {
 		try {
-			const undo = spoofPremiumType();
+			const undo = spoofNitro();
 			if (undo) patches.push(undo);
-			else diag.push("user spoof unavailable");
+			else diag.push("Nitro spoof unavailable");
 		} catch (e: any) {
-			diag.push(`spoof error: ${e?.message ?? e}`);
+			diag.push(`Nitro spoof: ${e?.message ?? e}`);
 		}
 	}
 
